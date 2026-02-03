@@ -17,7 +17,7 @@ INSTRUCTIONS:
 */
 
 -- Set your project ID
-DECLARE project_id STRING DEFAULT 'modular-command-486220-q2';
+DECLARE project_id STRING DEFAULT 'your-project-id';
 
 -- Drop and recreate 'bronze' dataset
 BEGIN
@@ -42,4 +42,5 @@ BEGIN
   EXECUTE IMMEDIATE FORMAT('CREATE SCHEMA `%s.gold`', project_id);
 EXCEPTION WHEN ERROR THEN
   EXECUTE IMMEDIATE FORMAT('CREATE SCHEMA IF NOT EXISTS `%s.gold`', project_id);
+
 END;
