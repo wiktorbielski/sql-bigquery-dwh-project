@@ -41,40 +41,45 @@ Source Systems (CRM, ERP)
 ## 📊 Data Layer Details
 
 ### Bronze Layer Tables
-Raw data ingested from source systems:
+Raw data ingested from source systems without transformations:
 
-| Table name | Source | Main purpose | Key columns |
+| Table Name | Source | Main Purpose | Key Columns |
 |------------|--------|--------------|-------------|
-| `bronze.crm_cust_info` | CRM | Customer master | cst_id, cst_key, firstname, lastname, marital_status, gender, create_date |
-| `bronze.crm_prd_info` | CRM | Product master | prd_id, prd_key, name, cost, product_line, start_dt, end_dt |
-| `bronze.crm_sales_details` | CRM | Sales transactions | order_num, prd_key, cust_id, dates, sales, quantity, price |
-| `bronze.erp_loc_a101` | ERP | Customer location | cid, country |
-| `bronze.erp_cust_az12` | ERP | Customer demographics | cid, birthdate, gender |
-| `bronze.erp_px_cat_g1v2` | ERP | Product categories | id, category, subcategory, maintenance |
+| `bronze.crm_cust_info` | CRM | Customer master data | cst_id, cst_key, cst_firstname, cst_lastname, cst_marital_status, cst_gndr, cst_create_date |
+| `bronze.crm_prd_info` | CRM | Product master data | prd_id, prd_key (format: CATID-PRDKEY), prd_nm, prd_cost, prd_line, prd_start_dt, prd_end_dt |
+| `bronze.crm_sales_details` | CRM | Sales transactions | sls_ord_num, sls_prd_key, sls_cust_id, sls_order_dt, sls_ship_dt, sls_due_dt, sls_sales, sls_quantity, sls_price |
+| `bronze.erp_loc_a101` | ERP | Customer location mapping | cid (customer ID), cntry (country code) |
+| `bronze.erp_cust_az12` | ERP | Customer demographics | cid (may have "NAS" prefix), bdate (birthdate), gen (gender) |
+| `bronze.erp_px_cat_g1v2` | ERP | Product category hierarchy | id (category ID), cat (category), subcat (subcategory), maintenance |
+
+---
 
 ### Silver Layer Tables
-Cleaned and transformed data with quality rules applied:
+Cleaned and validated data with business rules applied:
 
-| Table name | Source | Key transformations |
-|------------|--------|---------------------|
-| `silver.crm_cust_info` | Bronze CRM | Deduplicated by cst_id, trimmed text, normalized marital status & gender |
-| `silver.crm_prd_info` | Bronze CRM | Extracted cat_id from prd_key, normalized product lines, calculated end dates |
-| `silver.crm_sales_details` | Bronze CRM | Parsed dates (YYYYMMDD→DATE), recalculated sales = qty × price |
-| `silver.erp_cust_az12` | Bronze ERP | Removed "NAS" prefix, validated birthdates, normalized gender |
-| `silver.erp_loc_a101` | Bronze ERP | Removed dashes from cid, standardized country codes |
-| `silver.erp_px_cat_g1v2` | Bronze ERP | Pass-through (no transformations) |
+| Table Name | Source | Key Transformations | Data Quality Rules |
+|------------|--------|---------------------|-------------------|
+| `silver.crm_cust_info` | Bronze CRM | Deduplicated by cst_id (most recent record), trimmed text fields, normalized values | Marital status: S→Single, M→Married<br>Gender: F→Female, M→Male |
+| `silver.crm_prd_info` | Bronze CRM | Extracted cat_id (first 5 chars of prd_key), normalized product lines, calculated prd_end_dt using LEAD() | Product line: M→Mountain, R→Road, T→Touring, S→Other Sales<br>Cost: NULL→0 |
+| `silver.crm_sales_details` | Bronze CRM | Parsed integer dates to DATE format (YYYYMMDD), validated and recalculated sales amounts | Sales = quantity × price<br>Derived price when missing: sales ÷ quantity |
+| `silver.erp_cust_az12` | Bronze ERP | Removed "NAS" prefix from cid, validated birthdates, normalized gender values | Future birthdates→NULL<br>Gender: F/Female→Female, M/Male→Male |
+| `silver.erp_loc_a101` | Bronze ERP | Removed dashes from cid, standardized country codes to full names | DE→Germany, US/USA→United States<br>Blank/NULL→n/a |
+| `silver.erp_px_cat_g1v2` | Bronze ERP | Pass-through table (no transformations applied) | None |
+
+---
 
 ### Gold Layer Views (Star Schema)
-Analytics-ready dimension and fact tables:
+Analytics-ready dimensional model optimized for reporting:
 
-| View name | Type | Purpose & Key features |
-|-----------|------|------------------------|
-| `gold.dim_customers` | Dimension | Enriched customer data: merges CRM + ERP sources, surrogate key, fallback logic for gender |
-| `gold.dim_products` | Dimension | Current products only (prd_end_dt IS NULL), includes category hierarchy, surrogate key |
-| `gold.fact_sales` | Fact | Sales transactions with surrogate keys to dimensions, measures: sales, quantity, price |
+| View Name | Type | Grain | Key Features | Source Tables |
+|-----------|------|-------|--------------|---------------|
+| `gold.dim_customers` | Dimension | One row per customer | **Surrogate key:** customer_key (ROW_NUMBER)<br>**Data enrichment:** Merges CRM + ERP sources<br>**Fallback logic:** Gender from CRM (primary), ERP (secondary)<br>**Attributes:** Demographics, location, create date | `silver.crm_cust_info`<br>`silver.erp_cust_az12`<br>`silver.erp_loc_a101` |
+| `gold.dim_products` | Dimension | One row per active product | **Surrogate key:** product_key (ROW_NUMBER)<br>**Filter:** Active products only (prd_end_dt IS NULL)<br>**Hierarchy:** Category → Subcategory<br>**Attributes:** Product details, cost, line, maintenance flag | `silver.crm_prd_info`<br>`silver.erp_px_cat_g1v2` |
+| `gold.fact_sales` | Fact | One row per order line item | **Foreign keys:** customer_key, product_key<br>**Measures:** sales_amount, quantity, price<br>**Dates:** order_date, shipping_date, due_date<br>**Business key:** order_number | `silver.crm_sales_details`<br>`gold.dim_customers`<br>`gold.dim_products` |
 
-**Relationships**: `fact_sales` → `dim_customers` (customer_key), `dim_products` (product_key)  
-**Grain**: One row per order line item
+**Star Schema Relationships:**
+- `fact_sales.customer_key` → `dim_customers.customer_key` (Many-to-One)
+- `fact_sales.product_key` → `dim_products.product_key` (Many-to-One)
 
 ## 🔄 ETL Pipeline
 
